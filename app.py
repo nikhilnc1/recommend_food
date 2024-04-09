@@ -1,9 +1,15 @@
+import firebase_admin
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import linear_kernel
-import pickle
+from firebase_admin import credentials
 from flask import Flask, request, jsonify
 import requests
+
+# Initialize Firebase Admin SDK
+cred = credentials.Certificate("intellicater-firebase-adminsdk-r3q36-28b3cdbc74.json")
+firebase_admin.initialize_app(cred, {
+    'databaseURL': 'https://intellicater-default-rtdb.firebaseio.com/'
+}, name='intellicater')
+
 # Function to load data from JSON
 def load_data_from_json(url):
     response = requests.get(url)
@@ -22,7 +28,6 @@ for user, items in ratings.items():
     for item, rating in items.items():
         df.loc[len(df)] = {'userID': user, 'itemID': item, 'rating': rating}
 
-print(df)
 
 def collaborative_filtering_recommendation(data, user_id, num_recommendations=4):
     user_data = data[data['userID'] == user_id]
@@ -60,8 +65,8 @@ def recommend(userid):
 
 print(recommend('zG7g6bhvTWT3UvnCEMMHYSJnOdB2'))
 
-with open('food_recommend.pkl', 'rb') as f:
-    model = pickle.load(f)
+# with open('food_recommend.pkl', 'rb') as f:
+#     model = pickle.load(f)
 
 app = Flask('intellicater')
 
