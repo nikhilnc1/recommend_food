@@ -73,7 +73,7 @@ app = Flask('intellicater')
 @app.route('/recommendation', methods=['POST'])
 def recommendation():
 
-    user_id = request.form.get('userID')
+    user_id: str = request.form.get('userID')
 
 
     # Get recommendations using the loaded model
