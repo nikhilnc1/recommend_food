@@ -84,7 +84,7 @@ def recommendation():
     # }
 
     # Directly return the list of recommended items as JSON
-    return jsonify(recommended_items)
+    return jsonify(menu=recommended_items)
 
 
 if __name__ == '__main__':
