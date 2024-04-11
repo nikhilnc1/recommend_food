@@ -78,13 +78,13 @@ def recommendation():
 
     # Get recommendations using the loaded model
     recommended_items = recommend(user_id)  # Assuming your model returns a list
-    # response = {
-    #     'user_id': user_id,
-    #     'recommended_items': 77  # Convert to list for JSON serialization
-    # }
+    response = {
+        'user_id': user_id,
+        'recommended_items': recommended_items  # Convert to list for JSON serialization
+    }
 
     # Directly return the list of recommended items as JSON
-    return jsonify(menu=recommended_items)
+    return jsonify(response)
 
 
 if __name__ == '__main__':
