@@ -3,6 +3,8 @@ import pandas as pd
 from firebase_admin import credentials
 from flask import Flask, request, jsonify
 import requests
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
 
 # Initialize Firebase Admin SDK
 cred = credentials.Certificate("intellicater-firebase-adminsdk-r3q36-28b3cdbc74.json")
@@ -29,7 +31,22 @@ for user, items in ratings.items():
         df.loc[len(df)] = {'userID': user, 'itemID': item, 'rating': rating}
 
 
-def collaborative_filtering_recommendation(data, user_id, num_recommendations=4):
+menu_data = load_data_from_json('https://intellicater-default-rtdb.firebaseio.com/menu.json')
+
+# Create DataFrame from menu data
+menu_items = []
+for item_id, item_info in menu_data.items():
+    menu_items.append({'itemID': item_id, 'name': item_info['foodName'], 'description': item_info['foodDescription'], 'price': item_info['foodPrice']})
+
+
+menu_df = pd.DataFrame(menu_items)
+
+# TF-IDF Vectorization for content-based recommendation
+tfidf = TfidfVectorizer(stop_words='english')
+menu_df['description'] = menu_df['description'].fillna('')
+tfidf_matrix = tfidf.fit_transform(menu_df['description'])
+cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
+def collaborative_filtering_recommendation(data, user_id, num_recommendations=5):
     user_data = data[data['userID'] == user_id]
     user_items = list(user_data['itemID'])
 
@@ -44,17 +61,22 @@ def collaborative_filtering_recommendation(data, user_id, num_recommendations=4)
 
     return top_items['itemID']
 
-def hybrid_recommendation(data, user_id, num_recommendations=10):
-    # Get content-based recommendations
-    #content_based = content_based_recommendation(data, user_id, num_recommendations)
+def content_based_recommendation(user_id, num_recommendations=5):
+    last_rated_item = df[df['userID'] == user_id].tail(1)['itemID'].values[0]
+    idx = menu_df[menu_df['itemID'] == last_rated_item].index[0]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    sim_scores = sim_scores[1:num_recommendations + 1]
+    item_indices = [i[0] for i in sim_scores]
+    return menu_df['itemID'].iloc[item_indices].tolist()
 
-    # Get collaborative filtering recommendations
+def hybrid_recommendation(data, user_id, num_recommendations=5):
+    content_based = content_based_recommendation(user_id, num_recommendations)
     collaborative_filtering = collaborative_filtering_recommendation(data, user_id, num_recommendations)
+    hybrid_recommendations = pd.concat([pd.Series(content_based), pd.Series(collaborative_filtering)]).drop_duplicates().head(num_recommendations)
+    return hybrid_recommendations.tolist()
 
-    # Combine the recommendations
-    #hybrid_recommendations = pd.concat([content_based, collaborative_filtering]).drop_duplicates().head(num_recommendations)
 
-    return collaborative_filtering
 
 def recommend(userid):
     recommended_items = hybrid_recommendation(df, userid)
@@ -63,7 +85,7 @@ def recommend(userid):
         recommended_item_ids.append(item_id)
     return recommended_item_ids
 
-print(recommend('zG7g6bhvTWT3UvnCEMMHYSJnOdB2'))
+print(recommend('9XrD3k3EYmgQpCFomdhLPeJ79EJ3'))
 
 # with open('food_recommend.pkl', 'rb') as f:
 #     model = pickle.load(f)
