@@ -3,8 +3,8 @@ import pandas as pd
 from firebase_admin import credentials
 from flask import Flask, request, jsonify
 import requests
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import linear_kernel
+from surprise import Dataset, Reader, KNNBasic
+from surprise.model_selection import train_test_split
 
 # Initialize Firebase Admin SDK
 cred = credentials.Certificate("intellicater-firebase-adminsdk-r3q36-28b3cdbc74.json")
@@ -30,7 +30,7 @@ for user, items in ratings.items():
     for item, rating in items.items():
         df.loc[len(df)] = {'userID': user, 'itemID': item, 'rating': rating}
 
-
+# Load menu data from Firebase
 menu_data = load_data_from_json('https://intellicater-default-rtdb.firebaseio.com/menu.json')
 
 # Create DataFrame from menu data
@@ -38,76 +38,55 @@ menu_items = []
 for item_id, item_info in menu_data.items():
     menu_items.append({'itemID': item_id, 'name': item_info['foodName'], 'description': item_info['foodDescription'], 'price': item_info['foodPrice']})
 
-
 menu_df = pd.DataFrame(menu_items)
 
-# TF-IDF Vectorization for content-based recommendation
-tfidf = TfidfVectorizer(stop_words='english')
-menu_df['description'] = menu_df['description'].fillna('')
-tfidf_matrix = tfidf.fit_transform(menu_df['description'])
-cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
-def collaborative_filtering_recommendation(data, user_id, num_recommendations=5):
-    user_data = data[data['userID'] == user_id]
-    user_items = list(user_data['itemID'])
+# Load the data into the surprise Dataset
+reader = Reader(rating_scale=(1, 5))
+data = Dataset.load_from_df(df[['userID', 'itemID', 'rating']], reader)
 
-    # Filter out items already rated by the user
-    available_items = data[~data['itemID'].isin(user_items)]
+# Train the User-Based Collaborative Filtering Model
+trainset, testset = train_test_split(data, test_size=0.25)
+sim_options_user = {'name': 'cosine', 'user_based': True}
+user_cf = KNNBasic(sim_options=sim_options_user)
+user_cf.fit(trainset)
 
-    # Group by itemID and compute the mean rating
-    item_ratings = available_items.groupby('itemID')['rating'].mean().reset_index()
+# Train the Item-Based Collaborative Filtering Model
+sim_options_item = {'name': 'cosine', 'user_based': False}
+item_cf = KNNBasic(sim_options=sim_options_item)
+item_cf.fit(trainset)
 
-    # Sort the items based on the mean rating
-    top_items = item_ratings.sort_values(by='rating', ascending=False).head(num_recommendations)
+# Recommendation Function
+def hybrid_recommendation(user_id, num_recommendations=5):
+    if user_id in df['userID'].unique():
+        # For existing users
+        user_inner_id = user_cf.trainset.to_inner_uid(user_id)
+        user_neighbors = user_cf.get_neighbors(user_inner_id, k=num_recommendations)
+        user_based_recommendations = [user_cf.trainset.to_raw_uid(neighbor) for neighbor in user_neighbors]
 
-    return top_items['itemID']
+        item_inner_ids = [item_cf.trainset.to_inner_iid(item) for item in user_based_recommendations]
+        item_neighbors = [item_cf.get_neighbors(item_inner_id, k=num_recommendations) for item_inner_id in item_inner_ids]
+        item_based_recommendations = [item_cf.trainset.to_raw_iid(neighbor) for neighbors in item_neighbors for neighbor in neighbors]
 
-def content_based_recommendation(user_id, num_recommendations=5):
-    last_rated_item = df[df['userID'] == user_id].tail(1)['itemID'].values[0]
-    idx = menu_df[menu_df['itemID'] == last_rated_item].index[0]
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-    sim_scores = sim_scores[1:num_recommendations + 1]
-    item_indices = [i[0] for i in sim_scores]
-    return menu_df['itemID'].iloc[item_indices].tolist()
+        hybrid_recommendations = list(set(user_based_recommendations + item_based_recommendations))[:num_recommendations]
+    else:
+        # For new users (generic recommendations)
+        popular_items = df['itemID'].value_counts().index.tolist()
+        hybrid_recommendations = popular_items[:num_recommendations]
 
-def hybrid_recommendation(data, user_id, num_recommendations=5):
-    content_based = content_based_recommendation(user_id, num_recommendations)
-    collaborative_filtering = collaborative_filtering_recommendation(data, user_id, num_recommendations)
-    hybrid_recommendations = pd.concat([pd.Series(content_based), pd.Series(collaborative_filtering)]).drop_duplicates().head(num_recommendations)
-    return hybrid_recommendations.tolist()
+    return hybrid_recommendations
 
-
-
-def recommend(userid):
-    recommended_items = hybrid_recommendation(df, userid)
-    recommended_item_ids = []
-    for item_id in recommended_items:
-        recommended_item_ids.append(item_id)
-    return recommended_item_ids
-
-print(recommend('9XrD3k3EYmgQpCFomdhLPeJ79EJ3'))
-
-# with open('food_recommend.pkl', 'rb') as f:
-#     model = pickle.load(f)
-
-app = Flask('intellicater')
+# Flask Web Application
+app = Flask('food_recommendation')
 
 @app.route('/recommendation', methods=['POST'])
 def recommendation():
-
     user_id = request.form.get('userID')
-
-
-    # Get recommendations using the loaded model
-    recommended_items = recommend(user_id)  # Assuming your model returns a list
+    recommended_items = hybrid_recommendation(user_id)
     response = {
         'user_id': user_id,
-        'recommended_items': recommended_items  # Convert to list for JSON serialization
+        'recommended_items': recommended_items
     }
-
-    # Directly return the list of recommended items as JSON
     return jsonify(response)
-
 
 if __name__ == '__main__':
     app.run(debug=True)
