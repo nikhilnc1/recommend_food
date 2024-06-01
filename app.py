@@ -3,8 +3,8 @@ import pandas as pd
 from firebase_admin import credentials
 from flask import Flask, request, jsonify
 import requests
-from surprise import Dataset, Reader, KNNBasic
-from surprise.model_selection import train_test_split
+import pickle
+from surprise import KNNBasic
 
 # Initialize Firebase Admin SDK
 cred = credentials.Certificate("intellicater-firebase-adminsdk-r3q36-28b3cdbc74.json")
@@ -33,27 +33,12 @@ for user, items in ratings.items():
 # Load menu data from Firebase
 menu_data = load_data_from_json('https://intellicater-default-rtdb.firebaseio.com/menu.json')
 
-# Create DataFrame from menu data
-menu_items = []
-for item_id, item_info in menu_data.items():
-    menu_items.append({'itemID': item_id, 'name': item_info['foodName'], 'description': item_info['foodDescription'], 'price': item_info['foodPrice']})
+# Load the trained models from pickle files
+with open('user_cf_model.pkl', 'rb') as f:
+    user_cf = pickle.load(f)
 
-menu_df = pd.DataFrame(menu_items)
-
-# Load the data into the surprise Dataset
-reader = Reader(rating_scale=(1, 5))
-data = Dataset.load_from_df(df[['userID', 'itemID', 'rating']], reader)
-
-# Train the User-Based Collaborative Filtering Model
-trainset, testset = train_test_split(data, test_size=0.25)
-sim_options_user = {'name': 'cosine', 'user_based': True}
-user_cf = KNNBasic(sim_options=sim_options_user)
-user_cf.fit(trainset)
-
-# Train the Item-Based Collaborative Filtering Model
-sim_options_item = {'name': 'cosine', 'user_based': False}
-item_cf = KNNBasic(sim_options=sim_options_item)
-item_cf.fit(trainset)
+with open('item_cf_model.pkl', 'rb') as f:
+    item_cf = pickle.load(f)
 
 # Recommendation Function
 def hybrid_recommendation(user_id, num_recommendations=5):
@@ -61,15 +46,22 @@ def hybrid_recommendation(user_id, num_recommendations=5):
         # For existing users
         user_inner_id = user_cf.trainset.to_inner_uid(user_id)
         user_neighbors = user_cf.get_neighbors(user_inner_id, k=num_recommendations)
-        user_based_recommendations = [user_cf.trainset.to_raw_uid(neighbor) for neighbor in user_neighbors]
+        user_based_recommendations = [user_cf.trainset.to_raw_iid(neighbor) for neighbor in user_neighbors]
 
-        item_inner_ids = [item_cf.trainset.to_inner_iid(item) for item in user_based_recommendations]
+        item_inner_ids = []
+        for item in user_based_recommendations:
+            try:
+                item_inner_id = item_cf.trainset.to_inner_iid(item)
+                item_inner_ids.append(item_inner_id)
+            except ValueError:
+                continue
+
         item_neighbors = [item_cf.get_neighbors(item_inner_id, k=num_recommendations) for item_inner_id in item_inner_ids]
         item_based_recommendations = [item_cf.trainset.to_raw_iid(neighbor) for neighbors in item_neighbors for neighbor in neighbors]
 
         hybrid_recommendations = list(set(user_based_recommendations + item_based_recommendations))[:num_recommendations]
     else:
-        # For new users (generic recommendations)
+        # For new users (popularity-based recommendations)
         popular_items = df['itemID'].value_counts().index.tolist()
         hybrid_recommendations = popular_items[:num_recommendations]
 
@@ -87,6 +79,8 @@ def recommendation():
         'recommended_items': recommended_items
     }
     return jsonify(response)
+
+print(hybrid_recommendation("oa4g0UbCCuO7CJSxXpFs6PBnTft2"))
 
 if __name__ == '__main__':
     app.run(debug=True)
