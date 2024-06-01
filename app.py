@@ -30,8 +30,6 @@ for user, items in ratings.items():
     for item, rating in items.items():
         df.loc[len(df)] = {'userID': user, 'itemID': item, 'rating': rating}
 
-# Load menu data from Firebase
-menu_data = load_data_from_json('https://intellicater-default-rtdb.firebaseio.com/menu.json')
 
 # Load the trained models from pickle files
 with open('user_cf_model.pkl', 'rb') as f:
